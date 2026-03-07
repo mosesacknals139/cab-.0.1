@@ -1,5 +1,5 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { supabase } from "@/lib/supabase-client";
+import { createServerSupabaseClient, formatSupabaseError, isSupabaseSetupError } from "@/lib/supabase-server";
 import { NextResponse } from "next/server";
 
 export async function POST() {
@@ -11,13 +11,16 @@ export async function POST() {
     }
 
     try {
+        const supabase = createServerSupabaseClient();
         const { data, error } = await supabase
             .from("profiles")
             .upsert({
                 id: userId,
-                full_name: `${user.firstName} ${user.lastName}`,
-                email: user.emailAddresses[0].emailAddress,
+                full_name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || "Uber Clone Rider",
+                email: user.emailAddresses[0]?.emailAddress || null,
                 avatar_url: user.imageUrl,
+            }, {
+                onConflict: "id",
             })
             .select()
             .single();
@@ -26,7 +29,16 @@ export async function POST() {
 
         return NextResponse.json(data);
     } catch (error) {
+        if (isSupabaseSetupError(error as { code?: string | null; message?: string | null })) {
+            return NextResponse.json({ ok: true, demo_mode: true });
+        }
+
         console.error("Error syncing user:", error);
-        return new NextResponse("Internal Server Error", { status: 500 });
+        return NextResponse.json(
+            {
+                error: formatSupabaseError(error as { code?: string | null; message?: string | null }, "profiles"),
+            },
+            { status: 500 }
+        );
     }
 }

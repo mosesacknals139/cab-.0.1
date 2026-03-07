@@ -4,6 +4,7 @@ import { UserButton, SignInButton, SignUpButton, SignedIn, SignedOut } from "@cl
 import Link from "next/link";
 import { MapPin, Shield, Clock, Star, ChevronRight, Zap } from "lucide-react";
 import { motion, useAnimation, useMotionValue, useTransform, animate } from "framer-motion";
+import type { Variants } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
 /* ─────────────────────────────────────────────────────────────
@@ -325,11 +326,11 @@ function Counter({ to, suffix = "" }: { to: number; suffix?: string }) {
    MAIN PAGE
 ───────────────────────────────────────────────────────────── */
 export default function Home() {
-  const containerVariants = {
+  const containerVariants: Variants = {
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: { staggerChildren: 0.12, delayChildren: 0.3 } },
   };
-  const itemVariants = {
+  const itemVariants: Variants = {
     hidden: { opacity: 0, y: 30 },
     visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: "easeOut" } },
   };

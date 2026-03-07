@@ -1,12 +1,13 @@
-import { auth } from "@clerk/nextjs/server";
-import { supabase } from "@/lib/supabase-client";
+import { auth, currentUser } from "@clerk/nextjs/server";
+import { createServerSupabaseClient, formatSupabaseError, isSupabaseSetupError } from "@/lib/supabase-server";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
     const { userId } = await auth();
+    const user = await currentUser();
 
     if (!userId) {
-        return new NextResponse("Unauthorized", { status: 401 });
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     try {
@@ -21,6 +22,37 @@ export async function POST(req: Request) {
             fare
         } = body;
 
+        if (
+            !pickup_location ||
+            !dropoff_location ||
+            pickup_lat == null ||
+            pickup_lng == null ||
+            dropoff_lat == null ||
+            dropoff_lng == null
+        ) {
+            return NextResponse.json(
+                { error: "Pickup and dropoff locations are required." },
+                { status: 400 }
+            );
+        }
+
+        const supabase = createServerSupabaseClient();
+
+        if (user) {
+            const { error: profileError } = await supabase
+                .from("profiles")
+                .upsert({
+                    id: userId,
+                    full_name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || "Uber Clone Rider",
+                    email: user.emailAddresses[0]?.emailAddress || null,
+                    avatar_url: user.imageUrl,
+                }, {
+                    onConflict: "id",
+                });
+
+            if (profileError) throw profileError;
+        }
+
         const { data, error } = await supabase
             .from("rides")
             .insert({
@@ -31,7 +63,7 @@ export async function POST(req: Request) {
                 pickup_lng,
                 dropoff_lat,
                 dropoff_lng,
-                fare,
+                fare: Number(fare),
                 status: 'requested'
             })
             .select()
@@ -41,7 +73,15 @@ export async function POST(req: Request) {
 
         return NextResponse.json(data);
     } catch (error) {
-        console.error("Error creating ride:", error);
-        return new NextResponse("Internal Server Error", { status: 500 });
+        if (!isSupabaseSetupError(error as { code?: string | null; message?: string | null })) {
+            console.error("Error creating ride:", error);
+        }
+
+        return NextResponse.json(
+            {
+                error: formatSupabaseError(error as { code?: string | null; message?: string | null }, "rides"),
+            },
+            { status: 500 }
+        );
     }
 }

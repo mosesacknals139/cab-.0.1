@@ -1,7 +1,7 @@
 "use client";
 
 import { useUser, UserButton } from "@clerk/nextjs";
-import { Search, MapPin, Navigation, Car, Shield, CreditCard, Loader2, User, ArrowLeft, CheckCircle2 } from "lucide-react";
+import { Navigation, Car, Shield, Loader2, User, ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -10,8 +10,10 @@ import { supabase } from "@/lib/supabase-client";
 import { showToast } from "@/components/Toast";
 import PaymentModal from "@/components/PaymentModal";
 import { formatINR } from "@/lib/currency";
+import { DemoRide, upsertDemoRide, updateDemoRide } from "@/lib/demo-rides";
 import { Receipt } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useRef } from "react";
 
 type RidePoint = { address: string; lat: number; lng: number };
 
@@ -36,9 +38,10 @@ export default function Dashboard() {
     const [isConfirming, setIsConfirming] = useState(false);
     const [isBooking, setIsBooking] = useState(false);
     const [rideId, setRideId] = useState<string | null>(null);
-    const [rideStatus, setRideStatus] = useState<string | null>(null);
     const [showPayment, setShowPayment] = useState(false);
     const [completedRideId, setCompletedRideId] = useState<string | null>(null);
+    const [isDemoRideMode, setIsDemoRideMode] = useState(false);
+    const demoTimersRef = useRef<number[]>([]);
 
     // Sync user with Supabase on mount
     useEffect(() => {
@@ -50,7 +53,7 @@ export default function Dashboard() {
 
     // Subscribe to ride updates
     useEffect(() => {
-        if (!rideId) return;
+        if (!rideId || isDemoRideMode) return;
 
         const channel = supabase
             .channel(`ride-${rideId}`)
@@ -58,7 +61,6 @@ export default function Dashboard() {
                 "postgres_changes",
                 { event: "UPDATE", schema: "public", table: "rides", filter: `id=eq.${rideId}` },
                 (payload) => {
-                    setRideStatus(payload.new.status);
                     if (payload.new.status === "accepted") {
                         showToast("A driver has accepted your ride! They're on the way.", "success");
                     }
@@ -67,7 +69,6 @@ export default function Dashboard() {
                         setCompletedRideId(rideId);
                         setShowPayment(true);
                         setRideId(null);
-                        setRideStatus(null);
                         setPickup("");
                         setDestination("");
                         setPickupPoint(null);
@@ -83,7 +84,14 @@ export default function Dashboard() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [rideId]);
+    }, [rideId, isDemoRideMode]);
+
+    useEffect(() => {
+        return () => {
+            demoTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+            demoTimersRef.current = [];
+        };
+    }, []);
 
     useEffect(() => {
         if (!pickupPoint || !destinationPoint) {
@@ -116,6 +124,48 @@ export default function Dashboard() {
         setDestinationPoint(point);
     };
 
+    const resetRideDraft = () => {
+        setPickup("");
+        setDestination("");
+        setPickupPoint(null);
+        setDestinationPoint(null);
+        setEstimatedFare(BASE_FARE_INR);
+        setSelectionTarget("pickup");
+        setIsConfirming(false);
+    };
+
+    const clearDemoTimers = () => {
+        demoTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        demoTimersRef.current = [];
+    };
+
+    const completeDemoRideFlow = (nextRideId: string) => {
+        updateDemoRide(nextRideId, { status: "completed" });
+        showToast("Demo ride complete! Proceed to payment.", "success");
+        setCompletedRideId(nextRideId);
+        setShowPayment(true);
+        setRideId(null);
+        setIsDemoRideMode(false);
+        resetRideDraft();
+    };
+
+    const startDemoRideLifecycle = (ride: DemoRide) => {
+        clearDemoTimers();
+        setIsDemoRideMode(true);
+        setRideId(ride.id);
+
+        const acceptedTimer = window.setTimeout(() => {
+            updateDemoRide(ride.id, { status: "accepted", driver_id: "demo-driver" });
+            showToast("Demo driver accepted your ride.", "success");
+        }, 2500);
+
+        const completedTimer = window.setTimeout(() => {
+            completeDemoRideFlow(ride.id);
+        }, 7000);
+
+        demoTimersRef.current = [acceptedTimer, completedTimer];
+    };
+
     const handleRequestRide = async () => {
         if (!pickupPoint || !destinationPoint) {
             showToast("Select pickup and drop points from map or address suggestions.", "error");
@@ -138,14 +188,62 @@ export default function Dashboard() {
                 }),
             });
 
-            const data = await response.json();
-            if (data.id) {
-                setRideId(data.id);
-                setRideStatus("requested");
+            const contentType = response.headers.get("content-type") || "";
+            const payload = contentType.includes("application/json")
+                ? await response.json()
+                : { error: await response.text() };
+
+            if (!response.ok) {
+                const shouldUseDemoMode =
+                    response.status === 404 ||
+                    response.status === 401 ||
+                    (typeof payload.error === "string" &&
+                        (
+                            payload.error.includes("Supabase") ||
+                            payload.error.includes("schema cache") ||
+                            payload.error.includes("<!DOCTYPE html>") ||
+                            payload.error.includes("This page could not be found.") ||
+                            payload.error.includes("Unauthorized")
+                        ));
+
+                if (shouldUseDemoMode) {
+                    const demoRide: DemoRide = {
+                        id: crypto.randomUUID(),
+                        rider_id: user?.id || "demo-rider",
+                        driver_id: null,
+                        pickup_location: pickup,
+                        dropoff_location: destination,
+                        pickup_lat: pickupPoint.lat,
+                        pickup_lng: pickupPoint.lng,
+                        dropoff_lat: destinationPoint.lat,
+                        dropoff_lng: destinationPoint.lng,
+                        fare: estimatedFare,
+                        status: "requested",
+                        created_at: new Date().toISOString(),
+                        payment_status: "pending",
+                        demo_mode: true,
+                    };
+
+                    upsertDemoRide(demoRide);
+                    showToast("Ride requested in local demo mode.", "info");
+                    startDemoRideLifecycle(demoRide);
+                    return;
+                }
+
+                showToast(payload.error || "Booking failed. Please try again.", "error");
+                return;
+            }
+
+            if (payload.id) {
+                setRideId(payload.id);
+                setIsDemoRideMode(Boolean(payload.demo_mode));
                 showToast("Ride requested! Searching for nearby drivers...", "info");
             } else {
                 showToast("Booking failed. Please try again.", "error");
             }
+        } catch (error) {
+            console.error("Ride request failed:", error);
+            showToast("Ride request failed. Check your connection and try again.", "error");
         } finally {
             setIsBooking(false);
         }
@@ -293,7 +391,14 @@ export default function Dashboard() {
                                 Matching you with the nearest driver...
                             </motion.p>
                             <button
-                                onClick={() => setRideId(null)}
+                                onClick={() => {
+                                    if (rideId && isDemoRideMode) {
+                                        updateDemoRide(rideId, { status: "cancelled" });
+                                        clearDemoTimers();
+                                        setIsDemoRideMode(false);
+                                    }
+                                    setRideId(null);
+                                }}
                                 className="text-red-600 font-bold text-sm hover:underline"
                             >
                                 Cancel Request

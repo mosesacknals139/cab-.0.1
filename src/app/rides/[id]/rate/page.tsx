@@ -1,12 +1,13 @@
 "use client";
 
 import { useUser } from "@clerk/nextjs";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase-client";
 import { Star, MessageSquare, ArrowLeft, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 import { showToast } from "@/components/Toast";
+import { getDemoRideById, saveDemoRideRating } from "@/lib/demo-rides";
 
 const QUICK_COMPLIMENTS = [
     "Great driver", "Very punctual", "Clean car",
@@ -37,6 +38,21 @@ export default function RatePage() {
         }
         setSubmitting(true);
         try {
+            const demoRide = getDemoRideById(params?.id as string);
+
+            if (demoRide?.demo_mode) {
+                saveDemoRideRating(demoRide.id, {
+                    rating,
+                    comment: comment || null,
+                    tags: tags.length > 0 ? tags : null,
+                    created_at: new Date().toISOString(),
+                });
+                setSubmitted(true);
+                showToast("Thanks for your feedback!", "success");
+                setTimeout(() => router.push("/rides"), 2000);
+                return;
+            }
+
             const { error } = await supabase.from("ratings").insert({
                 ride_id: params?.id,
                 rider_id: user?.id,

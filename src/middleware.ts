@@ -1,7 +1,15 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
-const isPublicRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)", "/", "/api/public(.*)"]);
+const isPublicRoute = createRouteMatcher([
+    "/sign-in(.*)",
+    "/sign-up(.*)",
+    "/",
+    "/api/public(.*)",
+    "/api/ride(.*)",
+    "/api/user/sync(.*)",
+    "/api/payment/create-order(.*)",
+]);
 const isRideRequest = createRouteMatcher(["/api/ride(.*)"]);
 
 // Simple in-memory rate limit store (for demonstration - in production use Redis/Upstash)

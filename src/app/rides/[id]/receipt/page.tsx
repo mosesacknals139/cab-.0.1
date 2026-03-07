@@ -2,17 +2,20 @@
 
 import { useUser } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase-client";
-import { MapPin, Navigation, Star, Download, ArrowLeft, CheckCircle2 } from "lucide-react";
+import { Star, Download, ArrowLeft, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 import { formatINR } from "@/lib/currency";
+import { DemoRide, getDemoRideById } from "@/lib/demo-rides";
+import { Database } from "@/types/database";
+
+type RideRecord = Database["public"]["Tables"]["rides"]["Row"] | DemoRide;
 
 export default function ReceiptPage() {
     const { user, isLoaded } = useUser();
     const params = useParams();
-    const router = useRouter();
-    const [ride, setRide] = useState<any>(null);
+    const [ride, setRide] = useState<RideRecord | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -25,7 +28,13 @@ export default function ReceiptPage() {
                 .eq("id", params.id as string)
                 .eq("rider_id", user.id)
                 .single();
-            setRide(data);
+
+            if (data) {
+                setRide(data);
+            } else {
+                const demoRide = getDemoRideById(params.id as string);
+                setRide(demoRide?.rider_id === user.id ? demoRide : null);
+            }
             setLoading(false);
         };
         fetchRide();

@@ -12,9 +12,36 @@ interface PaymentModalProps {
     onSuccess: () => void;
 }
 
+interface RazorpayOrderData {
+    id: string;
+    amount: number;
+    currency: string;
+}
+
+interface RazorpayPaymentResponse {
+    razorpay_payment_id?: string;
+    razorpay_order_id?: string;
+    razorpay_signature?: string;
+}
+
+interface RazorpayFailureResponse {
+    error?: {
+        description?: string;
+    };
+}
+
+interface RazorpayInstance {
+    open: () => void;
+    on: (event: "payment.failed", handler: (response: RazorpayFailureResponse) => void) => void;
+}
+
+interface RazorpayConstructor {
+    new (options: Record<string, unknown>): RazorpayInstance;
+}
+
 declare global {
     interface Window {
-        Razorpay: any;
+        Razorpay: RazorpayConstructor;
     }
 }
 
@@ -25,7 +52,7 @@ export default function PaymentModal({
     onSuccess,
 }: PaymentModalProps) {
     const [loading, setLoading] = useState(true);
-    const [orderData, setOrderData] = useState<any>(null);
+    const [orderData, setOrderData] = useState<RazorpayOrderData | null>(null);
 
     useEffect(() => {
         // Load Razorpay script
@@ -40,13 +67,25 @@ export default function PaymentModal({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ amount: fare, rideId }),
         })
-            .then((r) => r.json())
+            .then(async (response) => {
+                const contentType = response.headers.get("content-type") || "";
+                const payload = contentType.includes("application/json")
+                    ? await response.json()
+                    : { error: await response.text() };
+
+                if (!response.ok) {
+                    throw new Error(payload.error || "Failed to initialize payment");
+                }
+
+                return payload;
+            })
             .then((data) => {
                 setOrderData(data);
                 setLoading(false);
             })
-            .catch(() => {
-                showToast("Failed to initialize payment", "error");
+            .catch((error: unknown) => {
+                const message = error instanceof Error ? error.message : "Failed to initialize payment";
+                showToast(message, "error");
                 onClose();
             });
 
@@ -65,7 +104,7 @@ export default function PaymentModal({
             name: "Uber Clone",
             description: `Payment for Ride #${rideId}`,
             order_id: orderData.id,
-            handler: function (response: any) {
+            handler: function (response: RazorpayPaymentResponse) {
                 // In production, verify signature on backend here
                 console.log("Payment Success:", response);
                 showToast("Payment successful! 🎉", "success");
@@ -81,8 +120,8 @@ export default function PaymentModal({
         };
 
         const rzp = new window.Razorpay(options);
-        rzp.on('payment.failed', function (response: any) {
-            showToast(response.error.description || "Payment failed", "error");
+        rzp.on('payment.failed', function (response: RazorpayFailureResponse) {
+            showToast(response.error?.description || "Payment failed", "error");
         });
         rzp.open();
     };

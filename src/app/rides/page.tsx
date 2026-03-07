@@ -7,6 +7,7 @@ import { MapPin, Navigation, Clock, CheckCircle2, XCircle, Loader2, ArrowLeft, R
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { formatINR } from "@/lib/currency";
+import { getDemoRidesForUser } from "@/lib/demo-rides";
 
 interface Ride {
     id: string;
@@ -42,7 +43,10 @@ export default function RideHistoryPage() {
                 .eq("rider_id", user.id)
                 .order("created_at", { ascending: false });
 
-            const rideList = data || [];
+            const liveRides = data || [];
+            const demoRides = getDemoRidesForUser(user.id);
+            const rideList = [...demoRides, ...liveRides.filter((ride) => !demoRides.some((demoRide) => demoRide.id === ride.id))]
+                .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
             setRides(rideList);
             setTotalSpent(
                 rideList
