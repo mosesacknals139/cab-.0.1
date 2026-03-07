@@ -2,10 +2,19 @@ import Razorpay from "razorpay";
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
-const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || "",
-    key_secret: process.env.RAZORPAY_KEY_SECRET || "",
-});
+function createRazorpayClient() {
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+    if (!keyId || !keySecret) {
+        return null;
+    }
+
+    return new Razorpay({
+        key_id: keyId,
+        key_secret: keySecret,
+    });
+}
 
 function createReceiptId(rideId: string) {
     const compactRideId = rideId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 30);
@@ -25,6 +34,15 @@ export async function POST(req: Request) {
             return NextResponse.json(
                 { error: "Missing payment amount or ride ID." },
                 { status: 400 }
+            );
+        }
+
+        const razorpay = createRazorpayClient();
+
+        if (!razorpay) {
+            return NextResponse.json(
+                { error: "Razorpay server keys are missing." },
+                { status: 500 }
             );
         }
 
