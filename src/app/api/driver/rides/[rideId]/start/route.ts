@@ -21,10 +21,10 @@ export async function POST(_: Request, { params }: RouteContext) {
 
         const { data, error } = await supabase
             .from("rides")
-            .update({ status: "completed", payment_status: "pending" })
+            .update({ status: "ongoing" })
             .eq("id", rideId)
             .eq("driver_id", userId)
-            .in("status", ["accepted", "ongoing"])
+            .eq("status", "accepted")
             .select("*")
             .maybeSingle();
 
@@ -32,7 +32,7 @@ export async function POST(_: Request, { params }: RouteContext) {
 
         if (!data) {
             return NextResponse.json(
-                { error: "Ride could not be completed." },
+                { error: "Ride could not be started." },
                 { status: 409 }
             );
         }

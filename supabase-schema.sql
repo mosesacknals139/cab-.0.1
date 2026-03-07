@@ -3,6 +3,18 @@
 -- Run this in: Supabase Dashboard > SQL Editor
 -- =========================================
 
+-- Ensure required extension exists for gen_random_uuid()
+create extension if not exists pgcrypto;
+
+-- Helper to read authenticated user id from JWT claims
+create or replace function public.requesting_user_id()
+returns text
+language sql
+stable
+as $$
+  select nullif(current_setting('request.jwt.claim.sub', true), '');
+$$;
+
 -- 1. Profiles Table (synced with Clerk users)
 create table if not exists public.profiles (
   id text primary key,   -- Clerk user ID
@@ -39,21 +51,26 @@ alter table public.profiles enable row level security;
 alter table public.rides enable row level security;
 
 -- Profiles: users can read/write their own profile
+drop policy if exists "Users can view own profile" on public.profiles;
 create policy "Users can view own profile" on public.profiles
   for select using (id = requesting_user_id());
 
+drop policy if exists "Users can update own profile" on public.profiles;
 create policy "Users can update own profile" on public.profiles
   for update using (id = requesting_user_id());
 
 -- Profiles: allow inserts from API routes (using service role)
+drop policy if exists "Allow profile upsert from server" on public.profiles;
 create policy "Allow profile upsert from server" on public.profiles
   for insert with check (true);
 
 -- Rides: riders can insert their own rides
+drop policy if exists "Riders can create rides" on public.rides;
 create policy "Riders can create rides" on public.rides
   for insert with check (rider_id = requesting_user_id());
 
 -- Rides: riders and drivers can view their own rides
+drop policy if exists "Users can view relevant rides" on public.rides;
 create policy "Users can view relevant rides" on public.rides
   for select using (
     rider_id = requesting_user_id() or
@@ -62,6 +79,7 @@ create policy "Users can view relevant rides" on public.rides
   );
 
 -- Rides: drivers can update rides (to accept/complete)
+drop policy if exists "Drivers can update rides" on public.rides;
 create policy "Drivers can update rides" on public.rides
   for update using (
     driver_id = requesting_user_id() or
@@ -72,7 +90,21 @@ create policy "Drivers can update rides" on public.rides
 -- Realtime Publication
 -- =========================================
 -- Allow Supabase Realtime to broadcast ride changes
-alter publication supabase_realtime add table public.rides;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'rides'
+  ) then
+    alter publication supabase_realtime add table public.rides;
+  end if;
+end $$;
+
+-- Refresh PostgREST schema cache
+notify pgrst, 'reload schema';
 
 -- =========================================
 -- 3. Add payment columns to rides
@@ -96,10 +128,23 @@ create table if not exists public.ratings (
 
 alter table public.ratings enable row level security;
 
+drop policy if exists "Riders can insert their own ratings" on public.ratings;
 create policy "Riders can insert their own ratings" on public.ratings
   for insert with check (rider_id = requesting_user_id());
 
+drop policy if exists "Ratings are publicly readable" on public.ratings;
 create policy "Ratings are publicly readable" on public.ratings
   for select using (true);
 
-alter publication supabase_realtime add table public.ratings;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'ratings'
+  ) then
+    alter publication supabase_realtime add table public.ratings;
+  end if;
+end $$;

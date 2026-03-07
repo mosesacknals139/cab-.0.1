@@ -2,17 +2,15 @@
 
 import { useUser, UserButton } from "@clerk/nextjs";
 import { Navigation, Car, Shield, Loader2, User, ArrowLeft, type LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import AutocompleteInput from "@/components/AutocompleteInput";
 import { showToast } from "@/components/Toast";
 import PaymentModal from "@/components/PaymentModal";
 import { formatINR } from "@/lib/currency";
-import { DemoRide, upsertDemoRide, updateDemoRide } from "@/lib/demo-rides";
 import { Receipt } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useRef } from "react";
 
 type RidePoint = { address: string; lat: number; lng: number };
 type RideStatus = "requested" | "accepted" | "ongoing" | "completed" | "cancelled";
@@ -58,8 +56,6 @@ export default function Dashboard() {
     const [completedRideId, setCompletedRideId] = useState<string | null>(null);
     const [completedRideFare, setCompletedRideFare] = useState<number | null>(null);
     const [currentRideStatus, setCurrentRideStatus] = useState<RideStatus | null>(null);
-    const [isDemoRideMode, setIsDemoRideMode] = useState(false);
-    const demoTimersRef = useRef<number[]>([]);
     const rideStatusRef = useRef<RideStatus | null>(null);
     const selectedRide = RIDE_OPTIONS.find((ride) => ride.id === selectedRideType) ?? RIDE_OPTIONS[0];
     const selectedRideFare = estimatedFare + selectedRide.surcharge;
@@ -74,7 +70,7 @@ export default function Dashboard() {
 
     // Poll ride updates for real backend rides
     useEffect(() => {
-        if (!rideId || isDemoRideMode) return;
+        if (!rideId) return;
 
         let cancelled = false;
         const syncRideStatus = async () => {
@@ -134,14 +130,7 @@ export default function Dashboard() {
             cancelled = true;
             window.clearInterval(poller);
         };
-    }, [rideId, isDemoRideMode, selectedRideFare]);
-
-    useEffect(() => {
-        return () => {
-            demoTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-            demoTimersRef.current = [];
-        };
-    }, []);
+    }, [rideId, selectedRideFare]);
 
     useEffect(() => {
         if (!pickupPoint || !destinationPoint) {
@@ -187,41 +176,6 @@ export default function Dashboard() {
         rideStatusRef.current = null;
     };
 
-    const clearDemoTimers = () => {
-        demoTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-        demoTimersRef.current = [];
-    };
-
-    const completeDemoRideFlow = (nextRideId: string, fare: number) => {
-        updateDemoRide(nextRideId, { status: "completed" });
-        showToast("Demo ride complete! Proceed to payment.", "success");
-        setCompletedRideId(nextRideId);
-        setCompletedRideFare(fare);
-        setShowPayment(true);
-        setRideId(null);
-        setIsDemoRideMode(false);
-        resetRideDraft();
-    };
-
-    const startDemoRideLifecycle = (ride: DemoRide) => {
-        clearDemoTimers();
-        setIsDemoRideMode(true);
-        setRideId(ride.id);
-
-        const acceptedTimer = window.setTimeout(() => {
-            updateDemoRide(ride.id, { status: "accepted", driver_id: "demo-driver" });
-            rideStatusRef.current = "accepted";
-            setCurrentRideStatus("accepted");
-            showToast("Demo driver accepted your ride.", "success");
-        }, 2500);
-
-        const completedTimer = window.setTimeout(() => {
-            completeDemoRideFlow(ride.id, ride.fare);
-        }, 7000);
-
-        demoTimersRef.current = [acceptedTimer, completedTimer];
-    };
-
     const handleRequestRide = async () => {
         if (!pickupPoint || !destinationPoint) {
             showToast("Select pickup and drop points from map or address suggestions.", "error");
@@ -250,51 +204,12 @@ export default function Dashboard() {
                 : { error: await response.text() };
 
             if (!response.ok) {
-                const shouldUseDemoMode =
-                    response.status === 404 ||
-                    response.status === 401 ||
-                    (typeof payload.error === "string" &&
-                        (
-                            payload.error.includes("Supabase") ||
-                            payload.error.includes("schema cache") ||
-                            payload.error.includes("<!DOCTYPE html>") ||
-                            payload.error.includes("This page could not be found.") ||
-                            payload.error.includes("Unauthorized")
-                        ));
-
-                if (shouldUseDemoMode) {
-                    const demoRide: DemoRide = {
-                        id: crypto.randomUUID(),
-                        rider_id: user?.id || "demo-rider",
-                        driver_id: null,
-                        pickup_location: pickup,
-                        dropoff_location: destination,
-                        pickup_lat: pickupPoint.lat,
-                        pickup_lng: pickupPoint.lng,
-                        dropoff_lat: destinationPoint.lat,
-                        dropoff_lng: destinationPoint.lng,
-                        fare: selectedRideFare,
-                        status: "requested",
-                        created_at: new Date().toISOString(),
-                        payment_status: "pending",
-                        demo_mode: true,
-                    };
-
-                    upsertDemoRide(demoRide);
-                    rideStatusRef.current = "requested";
-                    setCurrentRideStatus("requested");
-                    showToast("Ride requested in local demo mode.", "info");
-                    startDemoRideLifecycle(demoRide);
-                    return;
-                }
-
                 showToast(payload.error || "Booking failed. Please try again.", "error");
                 return;
             }
 
             if (payload.id) {
                 setRideId(payload.id);
-                setIsDemoRideMode(Boolean(payload.demo_mode));
                 rideStatusRef.current = (payload.status as RideStatus | undefined) || "requested";
                 setCurrentRideStatus((payload.status as RideStatus | undefined) || "requested");
                 showToast("Ride requested! Searching for nearby drivers...", "info");
@@ -313,15 +228,6 @@ export default function Dashboard() {
 
     const handleCancelRideRequest = async () => {
         if (!rideId) return;
-
-        if (isDemoRideMode) {
-            updateDemoRide(rideId, { status: "cancelled" });
-            clearDemoTimers();
-            setIsDemoRideMode(false);
-            setRideId(null);
-            resetRideDraft();
-            return;
-        }
 
         try {
             const response = await fetch(`/api/ride/${rideId}/cancel`, {

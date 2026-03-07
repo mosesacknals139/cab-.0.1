@@ -29,8 +29,8 @@ export function formatSupabaseError(error: SupabaseErrorLike, tableName?: string
 
   if (isSupabaseSetupError(error)) {
     return tableName
-      ? `Supabase table "${tableName}" is missing. Run supabase-schema.sql in your Supabase SQL editor, then refresh the schema cache.`
-      : "Supabase tables are missing. Run supabase-schema.sql in your Supabase SQL editor, then refresh the schema cache.";
+      ? `Supabase table "${tableName}" is missing in the connected project. Run supabase-schema.sql in that project's SQL editor (the project in NEXT_PUBLIC_SUPABASE_URL), then refresh the schema cache.`
+      : "Supabase tables are missing in the connected project. Run supabase-schema.sql in that project's SQL editor (the project in NEXT_PUBLIC_SUPABASE_URL), then refresh the schema cache.";
   }
 
   if (isSupabasePermissionError(error)) {

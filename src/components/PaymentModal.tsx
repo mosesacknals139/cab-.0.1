@@ -53,6 +53,7 @@ export default function PaymentModal({
     onSuccess,
 }: PaymentModalProps) {
     const [loading, setLoading] = useState(true);
+    const [isProcessingPayment, setIsProcessingPayment] = useState(false);
     const [orderData, setOrderData] = useState<RazorpayOrderData | null>(null);
 
     useEffect(() => {
@@ -66,7 +67,7 @@ export default function PaymentModal({
         fetch("/api/payment/create-order", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ amount: fare, rideId }),
+            body: JSON.stringify({ rideId }),
         })
             .then(async (response) => {
                 const contentType = response.headers.get("content-type") || "";
@@ -98,7 +99,7 @@ export default function PaymentModal({
     }, [fare, rideId, onClose]);
 
     const handlePayment = () => {
-        if (!orderData || !window.Razorpay) return;
+        if (!orderData || !window.Razorpay || isProcessingPayment) return;
 
         const options = {
             key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
@@ -107,11 +108,34 @@ export default function PaymentModal({
             name: "Uber Clone",
             description: `Payment for Ride #${rideId}`,
             order_id: orderData.id,
-            handler: function (response: RazorpayPaymentResponse) {
-                // In production, verify signature on backend here
-                console.log("Payment Success:", response);
-                showToast("Payment successful! 🎉", "success");
-                onSuccess();
+            handler: async function (response: RazorpayPaymentResponse) {
+                setIsProcessingPayment(true);
+
+                try {
+                    const confirmResponse = await fetch("/api/payment/confirm", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            rideId,
+                            paymentId: response.razorpay_payment_id,
+                            orderId: response.razorpay_order_id,
+                            signature: response.razorpay_signature,
+                        }),
+                    });
+
+                    const confirmPayload = await confirmResponse.json();
+                    if (!confirmResponse.ok) {
+                        throw new Error(confirmPayload.error || "Payment confirmation failed.");
+                    }
+
+                    showToast("Payment successful! 🎉", "success");
+                    onSuccess();
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : "Payment confirmation failed.";
+                    showToast(message, "error");
+                } finally {
+                    setIsProcessingPayment(false);
+                }
             },
             prefill: {
                 name: "User",
@@ -146,6 +170,7 @@ export default function PaymentModal({
                     </div>
                     <button
                         onClick={onClose}
+                        disabled={isProcessingPayment}
                         className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors dark:text-zinc-400"
                     >
                         <X size={20} />
@@ -165,15 +190,15 @@ export default function PaymentModal({
 
                     <button
                         onClick={handlePayment}
-                        disabled={loading}
+                        disabled={loading || isProcessingPayment}
                         className="w-full bg-black dark:bg-white text-white dark:text-black py-5 rounded-2xl font-bold text-lg hover:bg-gray-800 dark:hover:bg-zinc-200 transition-all shadow-xl shadow-gray-200 dark:shadow-none disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 active:scale-95"
                     >
-                        {loading ? (
+                        {loading || isProcessingPayment ? (
                             <Loader2 className="animate-spin" size={20} />
                         ) : (
                             <Lock size={18} />
                         )}
-                        {loading ? "Initializing..." : "Pay with Razorpay"}
+                        {loading ? "Initializing..." : isProcessingPayment ? "Verifying Payment..." : "Pay with Razorpay"}
                     </button>
 
                     <p className="text-center text-[10px] uppercase tracking-widest font-black text-gray-300 dark:text-zinc-700 flex items-center justify-center gap-2">

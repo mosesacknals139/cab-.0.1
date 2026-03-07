@@ -1,6 +1,7 @@
 import Razorpay from "razorpay";
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { createServerSupabaseClient, formatSupabaseError } from "@/lib/supabase-server";
 
 function createRazorpayClient() {
     const keyId = process.env.RAZORPAY_KEY_ID;
@@ -28,11 +29,47 @@ export async function POST(req: Request) {
     }
 
     try {
-        const { amount, rideId } = await req.json();
+        const { rideId } = await req.json();
 
-        if (!amount || !rideId) {
+        if (!rideId) {
             return NextResponse.json(
-                { error: "Missing payment amount or ride ID." },
+                { error: "Missing ride ID." },
+                { status: 400 }
+            );
+        }
+
+        const supabase = createServerSupabaseClient();
+        const { data: ride, error: rideError } = await supabase
+            .from("rides")
+            .select("id, rider_id, fare, status, payment_status")
+            .eq("id", rideId)
+            .eq("rider_id", userId)
+            .maybeSingle();
+
+        if (rideError) throw rideError;
+
+        if (!ride) {
+            return NextResponse.json({ error: "Ride not found." }, { status: 404 });
+        }
+
+        if (ride.status !== "completed") {
+            return NextResponse.json(
+                { error: "Payment is available only after ride completion." },
+                { status: 409 }
+            );
+        }
+
+        if (ride.payment_status === "paid") {
+            return NextResponse.json(
+                { error: "This ride is already paid." },
+                { status: 409 }
+            );
+        }
+
+        const amount = Number(ride.fare);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            return NextResponse.json(
+                { error: "Invalid ride fare for payment." },
                 { status: 400 }
             );
         }
@@ -59,6 +96,14 @@ export async function POST(req: Request) {
 
         const order = await razorpay.orders.create(options);
 
+        const { error: updateRideError } = await supabase
+            .from("rides")
+            .update({ payment_intent_id: order.id })
+            .eq("id", rideId)
+            .eq("rider_id", userId);
+
+        if (updateRideError) throw updateRideError;
+
         return NextResponse.json({
             id: order.id,
             amount: order.amount,
@@ -66,6 +111,22 @@ export async function POST(req: Request) {
         });
     } catch (error) {
         console.error("Razorpay error:", error);
+        if (
+            typeof error === "object" &&
+            error !== null &&
+            ("code" in error || "message" in error)
+        ) {
+            return NextResponse.json(
+                {
+                    error: formatSupabaseError(
+                        error as { code?: string | null; message?: string | null },
+                        "rides"
+                    ),
+                },
+                { status: 500 }
+            );
+        }
+
         const message =
             typeof error === "object" &&
             error !== null &&

@@ -34,6 +34,23 @@ export async function POST(_: Request, { params }: RouteContext) {
 
         if (profileError) throw profileError;
 
+        const { data: existingActiveRide, error: existingActiveRideError } = await supabase
+            .from("rides")
+            .select("id")
+            .eq("driver_id", userId)
+            .in("status", ["accepted", "ongoing"])
+            .limit(1)
+            .maybeSingle();
+
+        if (existingActiveRideError) throw existingActiveRideError;
+
+        if (existingActiveRide) {
+            return NextResponse.json(
+                { error: "Complete your current ride before accepting a new one." },
+                { status: 409 }
+            );
+        }
+
         const { data, error } = await supabase
             .from("rides")
             .update({
