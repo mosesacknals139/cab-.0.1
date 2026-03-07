@@ -10,13 +10,17 @@ export const metadata: Metadata = {
 
 import ThemeToggle from "@/components/ThemeToggle";
 
+const clerkPublishableKey =
+  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+  process.env.CLERK_PUBLISHABLE_KEY;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
+    <ClerkProvider publishableKey={clerkPublishableKey}>
       <html lang="en" suppressHydrationWarning>
         <body className="antialiased">
           <div className="fixed bottom-6 left-6 z-[60]">
