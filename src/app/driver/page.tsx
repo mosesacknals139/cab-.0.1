@@ -1,94 +1,112 @@
 "use client";
 
 import { useUser, UserButton } from "@clerk/nextjs";
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-client";
+import { useCallback, useEffect, useState } from "react";
 import { showToast } from "@/components/Toast";
-
-import { Car, MapPin, Navigation, Clock, CheckCircle2, XCircle } from "lucide-react";
+import type { Database } from "@/types/database";
+import { Car, MapPin, Navigation, Clock, CheckCircle2, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { formatINR } from "@/lib/currency";
 
+type Ride = Database["public"]["Tables"]["rides"]["Row"];
+
 export default function DriverDashboard() {
     const { user, isLoaded } = useUser();
-    const [requests, setRequests] = useState<any[]>([]);
-    const [activeRide, setActiveRide] = useState<any>(null);
+    const [requests, setRequests] = useState<Ride[]>([]);
+    const [activeRide, setActiveRide] = useState<Ride | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [updatingRideId, setUpdatingRideId] = useState<string | null>(null);
+    const [isCompletingRide, setIsCompletingRide] = useState(false);
+
+    const loadDriverState = useCallback(async (silent = false) => {
+        if (!silent) {
+            setIsLoading(true);
+        }
+
+        try {
+            const response = await fetch("/api/driver/rides", {
+                cache: "no-store",
+            });
+            const payload = await response.json();
+
+            if (!response.ok) {
+                throw new Error(payload.error || "Failed to load driver dashboard.");
+            }
+
+            setRequests(payload.requests || []);
+            setActiveRide(payload.activeRide || null);
+        } catch (error) {
+            if (!silent) {
+                const message = error instanceof Error ? error.message : "Failed to load driver dashboard.";
+                showToast(message, "error");
+            }
+        } finally {
+            if (!silent) {
+                setIsLoading(false);
+            }
+        }
+    }, []);
 
     useEffect(() => {
         if (!isLoaded || !user) return;
 
-        // Fetch initial requested rides
-        const fetchRequests = async () => {
-            const { data } = await supabase
-                .from("rides")
-                .select("*")
-                .eq("status", "requested")
-                .order("created_at", { ascending: false });
-
-            setRequests(data || []);
-        };
-
-        fetchRequests();
-
-        // Subscribe to new ride requests
-        const channel = supabase
-            .channel("ride-requests")
-            .on(
-                "postgres_changes",
-                { event: "INSERT", schema: "public", table: "rides" },
-                (payload) => {
-                    if (payload.new.status === "requested") {
-                        setRequests((prev) => [payload.new, ...prev]);
-                    }
-                }
-            )
-            .on(
-                "postgres_changes",
-                { event: "UPDATE", schema: "public", table: "rides" },
-                (payload) => {
-                    if (payload.new.status !== "requested") {
-                        setRequests((prev) => prev.filter(r => r.id !== payload.new.id));
-                    }
-                }
-            )
-            .subscribe();
+        void loadDriverState();
+        const poller = window.setInterval(() => {
+            void loadDriverState(true);
+        }, 3000);
 
         return () => {
-            supabase.removeChannel(channel);
+            window.clearInterval(poller);
         };
-    }, [isLoaded, user]);
+    }, [isLoaded, user, loadDriverState]);
 
-    const handleAcceptRide = async (ride: any) => {
+    const handleAcceptRide = async (ride: Ride) => {
+        setUpdatingRideId(ride.id);
+
         try {
-            const { data, error } = await supabase
-                .from("rides")
-                .update({
-                    status: "accepted",
-                    driver_id: user?.id
-                })
-                .eq("id", ride.id)
-                .select()
-                .single();
+            const response = await fetch(`/api/driver/rides/${ride.id}/accept`, {
+                method: "POST",
+            });
+            const payload = await response.json();
 
-            if (error) throw error;
-            setActiveRide(data);
+            if (!response.ok) {
+                throw new Error(payload.error || "Failed to accept ride.");
+            }
+
+            setActiveRide(payload);
+            setRequests((prev) => prev.filter((request) => request.id !== ride.id));
+            showToast("Ride accepted. Head to pickup.", "success");
         } catch (error) {
-            console.error("Accept failed:", error);
+            const message = error instanceof Error ? error.message : "Accept failed.";
+            showToast(message, "error");
+        } finally {
+            setUpdatingRideId(null);
         }
     };
 
     const handleCompleteRide = async () => {
         if (!activeRide) return;
+
+        setIsCompletingRide(true);
+
         try {
-            await supabase
-                .from("rides")
-                .update({ status: "completed" })
-                .eq("id", activeRide.id);
+            const response = await fetch(`/api/driver/rides/${activeRide.id}/complete`, {
+                method: "POST",
+            });
+            const payload = await response.json();
+
+            if (!response.ok) {
+                throw new Error(payload.error || "Failed to complete ride.");
+            }
 
             setActiveRide(null);
+            await loadDriverState(true);
             showToast("Ride completed! Great job. Earnings updated.", "success");
         } catch (error) {
-            console.error("Complete failed:", error);
+            const message = error instanceof Error ? error.message : "Complete failed.";
+            showToast(message, "error");
+        } finally {
+            setIsCompletingRide(false);
         }
     };
 
@@ -111,8 +129,6 @@ export default function DriverDashboard() {
 
             <main className="flex-grow p-6 md:p-12">
                 <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-8">
-
-                    {/* Active Ride Section */}
                     <div className="lg:col-span-2 space-y-6">
                         <h2 className="text-3xl font-bold text-gray-900">
                             {activeRide ? "Current Mission" : "Available Requests"}
@@ -147,11 +163,20 @@ export default function DriverDashboard() {
 
                                     <button
                                         onClick={handleCompleteRide}
-                                        className="w-full bg-blue-600 hover:bg-blue-500 text-white py-5 rounded-2xl font-bold transition-all shadow-xl shadow-blue-900/20 flex items-center justify-center gap-2"
+                                        disabled={isCompletingRide}
+                                        className="w-full bg-blue-600 hover:bg-blue-500 text-white py-5 rounded-2xl font-bold transition-all shadow-xl shadow-blue-900/20 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                     >
-                                        <CheckCircle2 size={24} />
+                                        {isCompletingRide ? <Loader2 className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
                                         Complete Ride
                                     </button>
+                                </div>
+                            </div>
+                        ) : isLoading ? (
+                            <div className="bg-white rounded-3xl p-12 border border-gray-100 flex flex-col items-center justify-center text-center space-y-4">
+                                <Loader2 className="animate-spin text-blue-600" size={28} />
+                                <div className="space-y-1">
+                                    <p className="text-gray-900 font-bold">Loading ride requests</p>
+                                    <p className="text-gray-400 text-sm">Checking for nearby riders.</p>
                                 </div>
                             </div>
                         ) : requests.length > 0 ? (
@@ -177,8 +202,10 @@ export default function DriverDashboard() {
                                         </div>
                                         <button
                                             onClick={() => handleAcceptRide(ride)}
-                                            className="w-full bg-black text-white py-3 rounded-xl font-bold hover:bg-gray-800 transition-all"
+                                            disabled={updatingRideId === ride.id}
+                                            className="w-full bg-black text-white py-3 rounded-xl font-bold hover:bg-gray-800 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                         >
+                                            {updatingRideId === ride.id && <Loader2 className="animate-spin" size={16} />}
                                             Accept Ride
                                         </button>
                                     </div>
@@ -197,7 +224,6 @@ export default function DriverDashboard() {
                         )}
                     </div>
 
-                    {/* Sidebar Stats */}
                     <div className="space-y-6">
                         <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm space-y-6">
                             <h3 className="font-bold text-gray-900">Your Performance</h3>
@@ -213,7 +239,7 @@ export default function DriverDashboard() {
                             </div>
                             <div className="pt-4 border-t border-gray-50">
                                 <div className="flex items-center justify-between text-sm">
-                                    <span className="text-gray-500">Today's Earnings</span>
+                                    <span className="text-gray-500">Today&apos;s Earnings</span>
                                     <span className="font-bold text-green-600">{formatINR(142.5)}</span>
                                 </div>
                             </div>
@@ -226,7 +252,6 @@ export default function DriverDashboard() {
                             </p>
                         </div>
                     </div>
-
                 </div>
             </main>
         </div>

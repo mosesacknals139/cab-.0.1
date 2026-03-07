@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Lock, Loader2, ShieldCheck } from "lucide-react";
 import { showToast } from "@/components/Toast";
 import { formatINR } from "@/lib/currency";
@@ -90,7 +91,9 @@ export default function PaymentModal({
             });
 
         return () => {
-            document.body.removeChild(script);
+            if (document.body.contains(script)) {
+                document.body.removeChild(script);
+            }
         };
     }, [fare, rideId, onClose]);
 
@@ -126,8 +129,12 @@ export default function PaymentModal({
         rzp.open();
     };
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    if (typeof document === "undefined") {
+        return null;
+    }
+
+    return createPortal(
+        <div className="fixed inset-0 z-[2000] flex items-end md:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <div className="w-full max-w-md bg-white dark:bg-zinc-950 rounded-t-3xl md:rounded-3xl shadow-2xl overflow-hidden border border-gray-100 dark:border-zinc-800 transition-colors duration-300">
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-zinc-900">
@@ -176,6 +183,7 @@ export default function PaymentModal({
                     </p>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }

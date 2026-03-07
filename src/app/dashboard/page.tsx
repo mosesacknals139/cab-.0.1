@@ -1,12 +1,11 @@
 "use client";
 
 import { useUser, UserButton } from "@clerk/nextjs";
-import { Navigation, Car, Shield, Loader2, User, ArrowLeft } from "lucide-react";
+import { Navigation, Car, Shield, Loader2, User, ArrowLeft, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import AutocompleteInput from "@/components/AutocompleteInput";
-import { supabase } from "@/lib/supabase-client";
 import { showToast } from "@/components/Toast";
 import PaymentModal from "@/components/PaymentModal";
 import { formatINR } from "@/lib/currency";
@@ -16,6 +15,22 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useRef } from "react";
 
 type RidePoint = { address: string; lat: number; lng: number };
+type RideStatus = "requested" | "accepted" | "ongoing" | "completed" | "cancelled";
+type RideOptionId = "uberx" | "comfort" | "black";
+type RideOption = {
+    id: RideOptionId;
+    name: string;
+    time: string;
+    icon: LucideIcon;
+    desc: string;
+    surcharge: number;
+};
+
+const RIDE_OPTIONS: RideOption[] = [
+    { id: "uberx", name: "UberX", time: "5 min away", icon: Car, desc: "Fast, everyday rides", surcharge: 0 },
+    { id: "comfort", name: "Uber Comfort", time: "3 min away", icon: Shield, desc: "Newer cars, extra legroom", surcharge: 120 },
+    { id: "black", name: "Uber Black", time: "8 min away", icon: Navigation, desc: "Luxury rides with top-rated drivers", surcharge: 260 },
+];
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
     ssr: false,
@@ -35,13 +50,19 @@ export default function Dashboard() {
     const [destinationPoint, setDestinationPoint] = useState<RidePoint | null>(null);
     const [selectionTarget, setSelectionTarget] = useState<"pickup" | "destination">("pickup");
     const [estimatedFare, setEstimatedFare] = useState(BASE_FARE_INR);
+    const [selectedRideType, setSelectedRideType] = useState<RideOptionId>("uberx");
     const [isConfirming, setIsConfirming] = useState(false);
     const [isBooking, setIsBooking] = useState(false);
     const [rideId, setRideId] = useState<string | null>(null);
     const [showPayment, setShowPayment] = useState(false);
     const [completedRideId, setCompletedRideId] = useState<string | null>(null);
+    const [completedRideFare, setCompletedRideFare] = useState<number | null>(null);
+    const [currentRideStatus, setCurrentRideStatus] = useState<RideStatus | null>(null);
     const [isDemoRideMode, setIsDemoRideMode] = useState(false);
     const demoTimersRef = useRef<number[]>([]);
+    const rideStatusRef = useRef<RideStatus | null>(null);
+    const selectedRide = RIDE_OPTIONS.find((ride) => ride.id === selectedRideType) ?? RIDE_OPTIONS[0];
+    const selectedRideFare = estimatedFare + selectedRide.surcharge;
 
     // Sync user with Supabase on mount
     useEffect(() => {
@@ -51,40 +72,69 @@ export default function Dashboard() {
         }
     }, [isLoaded, user]);
 
-    // Subscribe to ride updates
+    // Poll ride updates for real backend rides
     useEffect(() => {
         if (!rideId || isDemoRideMode) return;
 
-        const channel = supabase
-            .channel(`ride-${rideId}`)
-            .on(
-                "postgres_changes",
-                { event: "UPDATE", schema: "public", table: "rides", filter: `id=eq.${rideId}` },
-                (payload) => {
-                    if (payload.new.status === "accepted") {
-                        showToast("A driver has accepted your ride! They're on the way.", "success");
-                    }
-                    if (payload.new.status === "completed") {
-                        showToast("Your ride is complete! Proceed to payment.", "success");
-                        setCompletedRideId(rideId);
-                        setShowPayment(true);
-                        setRideId(null);
-                        setPickup("");
-                        setDestination("");
-                        setPickupPoint(null);
-                        setDestinationPoint(null);
-                        setEstimatedFare(BASE_FARE_INR);
-                        setSelectionTarget("pickup");
-                        setIsConfirming(false);
-                    }
+        let cancelled = false;
+        const syncRideStatus = async () => {
+            try {
+                const response = await fetch(`/api/ride/${rideId}`, {
+                    cache: "no-store",
+                });
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(payload.error || "Failed to fetch ride status.");
                 }
-            )
-            .subscribe();
+
+                if (cancelled) return;
+
+                const nextStatus = payload.status as RideStatus;
+                const previousStatus = rideStatusRef.current;
+
+                rideStatusRef.current = nextStatus;
+                setCurrentRideStatus(nextStatus);
+
+                if (nextStatus === previousStatus) {
+                    return;
+                }
+
+                if (nextStatus === "accepted") {
+                    showToast("A driver has accepted your ride! They're on the way.", "success");
+                }
+
+                if (nextStatus === "completed") {
+                    showToast("Your ride is complete! Proceed to payment.", "success");
+                    setCompletedRideId(rideId);
+                    setCompletedRideFare(Number(payload.fare) || selectedRideFare);
+                    setShowPayment(true);
+                    setRideId(null);
+                    resetRideDraft();
+                }
+
+                if (nextStatus === "cancelled") {
+                    showToast("Your ride was cancelled.", "error");
+                    setRideId(null);
+                    resetRideDraft();
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Ride status sync failed:", error);
+                }
+            }
+        };
+
+        void syncRideStatus();
+        const poller = window.setInterval(() => {
+            void syncRideStatus();
+        }, 3000);
 
         return () => {
-            supabase.removeChannel(channel);
+            cancelled = true;
+            window.clearInterval(poller);
         };
-    }, [rideId, isDemoRideMode]);
+    }, [rideId, isDemoRideMode, selectedRideFare]);
 
     useEffect(() => {
         return () => {
@@ -130,8 +180,11 @@ export default function Dashboard() {
         setPickupPoint(null);
         setDestinationPoint(null);
         setEstimatedFare(BASE_FARE_INR);
+        setSelectedRideType("uberx");
         setSelectionTarget("pickup");
         setIsConfirming(false);
+        setCurrentRideStatus(null);
+        rideStatusRef.current = null;
     };
 
     const clearDemoTimers = () => {
@@ -139,10 +192,11 @@ export default function Dashboard() {
         demoTimersRef.current = [];
     };
 
-    const completeDemoRideFlow = (nextRideId: string) => {
+    const completeDemoRideFlow = (nextRideId: string, fare: number) => {
         updateDemoRide(nextRideId, { status: "completed" });
         showToast("Demo ride complete! Proceed to payment.", "success");
         setCompletedRideId(nextRideId);
+        setCompletedRideFare(fare);
         setShowPayment(true);
         setRideId(null);
         setIsDemoRideMode(false);
@@ -156,11 +210,13 @@ export default function Dashboard() {
 
         const acceptedTimer = window.setTimeout(() => {
             updateDemoRide(ride.id, { status: "accepted", driver_id: "demo-driver" });
+            rideStatusRef.current = "accepted";
+            setCurrentRideStatus("accepted");
             showToast("Demo driver accepted your ride.", "success");
         }, 2500);
 
         const completedTimer = window.setTimeout(() => {
-            completeDemoRideFlow(ride.id);
+            completeDemoRideFlow(ride.id, ride.fare);
         }, 7000);
 
         demoTimersRef.current = [acceptedTimer, completedTimer];
@@ -184,7 +240,7 @@ export default function Dashboard() {
                     pickup_lng: pickupPoint.lng,
                     dropoff_lat: destinationPoint.lat,
                     dropoff_lng: destinationPoint.lng,
-                    fare: estimatedFare,
+                    fare: selectedRideFare,
                 }),
             });
 
@@ -217,7 +273,7 @@ export default function Dashboard() {
                         pickup_lng: pickupPoint.lng,
                         dropoff_lat: destinationPoint.lat,
                         dropoff_lng: destinationPoint.lng,
-                        fare: estimatedFare,
+                        fare: selectedRideFare,
                         status: "requested",
                         created_at: new Date().toISOString(),
                         payment_status: "pending",
@@ -225,6 +281,8 @@ export default function Dashboard() {
                     };
 
                     upsertDemoRide(demoRide);
+                    rideStatusRef.current = "requested";
+                    setCurrentRideStatus("requested");
                     showToast("Ride requested in local demo mode.", "info");
                     startDemoRideLifecycle(demoRide);
                     return;
@@ -237,6 +295,8 @@ export default function Dashboard() {
             if (payload.id) {
                 setRideId(payload.id);
                 setIsDemoRideMode(Boolean(payload.demo_mode));
+                rideStatusRef.current = (payload.status as RideStatus | undefined) || "requested";
+                setCurrentRideStatus((payload.status as RideStatus | undefined) || "requested");
                 showToast("Ride requested! Searching for nearby drivers...", "info");
             } else {
                 showToast("Booking failed. Please try again.", "error");
@@ -250,6 +310,37 @@ export default function Dashboard() {
     };
 
     if (!isLoaded) return null;
+
+    const handleCancelRideRequest = async () => {
+        if (!rideId) return;
+
+        if (isDemoRideMode) {
+            updateDemoRide(rideId, { status: "cancelled" });
+            clearDemoTimers();
+            setIsDemoRideMode(false);
+            setRideId(null);
+            resetRideDraft();
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/ride/${rideId}/cancel`, {
+                method: "POST",
+            });
+            const payload = await response.json();
+
+            if (!response.ok) {
+                throw new Error(payload.error || "Failed to cancel ride.");
+            }
+
+            setRideId(null);
+            resetRideDraft();
+            showToast("Ride request cancelled.", "info");
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to cancel ride.";
+            showToast(message, "error");
+        }
+    };
 
     return (
         <div className="flex flex-col h-screen bg-white dark:bg-background md:flex-row overflow-hidden transition-colors duration-300">
@@ -323,31 +414,32 @@ export default function Dashboard() {
                             >
                                 <h3 className="font-bold text-gray-900 dark:text-white text-sm uppercase tracking-wider">Suggested Rides</h3>
                                 <div className="space-y-3">
-                                    {[
-                                        { id: 'uberx', name: 'UberX', price: formatINR(estimatedFare), time: '5 min away', icon: Car, active: true, desc: 'Fast, everyday rides' },
-                                        { id: 'comfort', name: 'Uber Comfort', price: formatINR(estimatedFare + 120), time: '3 min away', icon: Shield, desc: 'Newer cars, extra legroom' },
-                                        { id: 'black', name: 'Uber Black', price: formatINR(estimatedFare + 260), time: '8 min away', icon: Navigation, desc: 'Luxury rides with top-rated drivers' },
-                                    ].map((ride, i) => (
+                                    {RIDE_OPTIONS.map((ride, i) => {
+                                        const isSelected = ride.id === selectedRideType;
+
+                                        return (
                                         <motion.button
                                             key={ride.id}
                                             initial={{ opacity: 0, x: -20 }}
                                             animate={{ opacity: 1, x: 0 }}
                                             transition={{ delay: i * 0.1 }}
-                                            onClick={() => setIsConfirming(false)}
-                                            className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${ride.active ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-900/10 ring-1 ring-blue-600' : 'border-gray-100 dark:border-zinc-800 hover:border-gray-200 dark:hover:border-zinc-700'}`}
+                                            onClick={() => setSelectedRideType(ride.id)}
+                                            className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${isSelected ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-900/10 ring-1 ring-blue-600' : 'border-gray-100 dark:border-zinc-800 hover:border-gray-200 dark:hover:border-zinc-700'}`}
                                         >
                                             <div className="flex items-center gap-4">
-                                                <div className={`p-3 rounded-xl ${ride.active ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 dark:shadow-none' : 'bg-gray-100 dark:bg-zinc-800 text-black dark:text-white'}`}>
+                                                <div className={`p-3 rounded-xl ${isSelected ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 dark:shadow-none' : 'bg-gray-100 dark:bg-zinc-800 text-black dark:text-white'}`}>
                                                     <ride.icon size={22} />
                                                 </div>
                                                 <div className="text-left">
                                                     <p className="font-bold text-sm text-gray-900 dark:text-white">{ride.name}</p>
                                                     <p className="text-[10px] uppercase font-bold text-gray-400 dark:text-zinc-500">{ride.time}</p>
+                                                    <p className="text-xs text-gray-500 dark:text-zinc-400">{ride.desc}</p>
                                                 </div>
                                             </div>
-                                            <p className="font-bold text-base text-gray-900 dark:text-white">{ride.price}</p>
+                                            <p className="font-bold text-base text-gray-900 dark:text-white">{formatINR(estimatedFare + ride.surcharge)}</p>
                                         </motion.button>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </motion.div>
                         )}
@@ -360,10 +452,13 @@ export default function Dashboard() {
                             className="bg-blue-50 dark:bg-blue-900/10 p-6 rounded-3xl border border-blue-100 dark:border-blue-900/30 space-y-4"
                         >
                             <div className="flex justify-between items-center">
-                                <span className="font-bold text-blue-900 dark:text-blue-300">Total Fare</span>
-                                <span className="text-2xl font-black text-blue-900 dark:text-blue-300">{formatINR(estimatedFare)}</span>
+                                <div className="space-y-1">
+                                    <span className="font-bold text-blue-900 dark:text-blue-300">{selectedRide.name}</span>
+                                    <p className="text-xs text-blue-700 dark:text-blue-400">{selectedRide.desc}</p>
+                                </div>
+                                <span className="text-2xl font-black text-blue-900 dark:text-blue-300">{formatINR(selectedRideFare)}</span>
                             </div>
-                            <p className="text-xs text-blue-700 dark:text-blue-400">Includes all taxes and fees. Driver will arrive in approx. 5 minutes.</p>
+                            <p className="text-xs text-blue-700 dark:text-blue-400">Includes all taxes and fees. Driver will arrive in approx. {selectedRide.time.toLowerCase()}.</p>
                         </motion.div>
                     )}
 
@@ -388,17 +483,10 @@ export default function Dashboard() {
                                 transition={{ repeat: Infinity, duration: 2 }}
                                 className="text-gray-600 dark:text-zinc-400 font-medium"
                             >
-                                Matching you with the nearest driver...
+                                {currentRideStatus === "accepted" ? "Driver assigned. They're heading to pickup." : "Matching you with the nearest driver..."}
                             </motion.p>
                             <button
-                                onClick={() => {
-                                    if (rideId && isDemoRideMode) {
-                                        updateDemoRide(rideId, { status: "cancelled" });
-                                        clearDemoTimers();
-                                        setIsDemoRideMode(false);
-                                    }
-                                    setRideId(null);
-                                }}
+                                onClick={handleCancelRideRequest}
                                 className="text-red-600 font-bold text-sm hover:underline"
                             >
                                 Cancel Request
@@ -412,7 +500,7 @@ export default function Dashboard() {
                                 className="w-full bg-black dark:bg-white text-white dark:text-black py-5 rounded-2xl font-bold hover:bg-gray-800 dark:hover:bg-zinc-200 transition-all shadow-xl shadow-gray-200 dark:shadow-none disabled:opacity-50 disabled:cursor-not-allowed text-lg active:scale-95 flex items-center justify-center gap-2"
                             >
                                 {isBooking && <Loader2 className="animate-spin" />}
-                                {isConfirming ? 'Request UberX' : 'Choose UberX'}
+                                {isConfirming ? `Request ${selectedRide.name}` : `Choose ${selectedRide.name}`}
                             </button>
                             {isConfirming && (
                                 <button
@@ -470,10 +558,14 @@ export default function Dashboard() {
                 {showPayment && completedRideId && (
                     <PaymentModal
                         rideId={completedRideId}
-                        fare={estimatedFare}
-                        onClose={() => setShowPayment(false)}
+                        fare={completedRideFare ?? selectedRideFare}
+                        onClose={() => {
+                            setShowPayment(false);
+                            setCompletedRideFare(null);
+                        }}
                         onSuccess={() => {
                             setShowPayment(false);
+                            setCompletedRideFare(null);
                             showToast("Payment received! Thank you.", "success");
                         }}
                     />
