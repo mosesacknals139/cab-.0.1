@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase-client";
 import { MapPin, Navigation, Star, Download, ArrowLeft, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
+import { formatINR } from "@/lib/currency";
 
 export default function ReceiptPage() {
     const { user, isLoaded } = useUser();
@@ -48,7 +49,7 @@ export default function ReceiptPage() {
     }
 
     const formatDate = (iso: string) =>
-        new Intl.DateTimeFormat("en-US", {
+        new Intl.DateTimeFormat("en-IN", {
             weekday: "long", month: "long", day: "numeric", year: "numeric",
             hour: "numeric", minute: "2-digit",
         }).format(new Date(iso));
@@ -76,7 +77,7 @@ export default function ReceiptPage() {
 
                     {/* Fare */}
                     <div className="p-8 text-center border-b border-gray-100">
-                        <p className="text-5xl font-black text-gray-900">${(ride.fare || 0).toFixed(2)}</p>
+                        <p className="text-5xl font-black text-gray-900">{formatINR(ride.fare || 0)}</p>
                         <p className="text-gray-400 text-sm mt-1">Total charged</p>
                     </div>
 
@@ -104,19 +105,19 @@ export default function ReceiptPage() {
                         <div className="bg-gray-50 rounded-2xl p-5 space-y-3">
                             <div className="flex justify-between text-sm">
                                 <span className="text-gray-500">Base fare</span>
-                                <span className="text-gray-900 font-medium">${((ride.fare || 0) * 0.7).toFixed(2)}</span>
+                                <span className="text-gray-900 font-medium">{formatINR((ride.fare || 0) * 0.7)}</span>
                             </div>
                             <div className="flex justify-between text-sm">
                                 <span className="text-gray-500">Service fee</span>
-                                <span className="text-gray-900 font-medium">${((ride.fare || 0) * 0.2).toFixed(2)}</span>
+                                <span className="text-gray-900 font-medium">{formatINR((ride.fare || 0) * 0.2)}</span>
                             </div>
                             <div className="flex justify-between text-sm">
                                 <span className="text-gray-500">Tax</span>
-                                <span className="text-gray-900 font-medium">${((ride.fare || 0) * 0.1).toFixed(2)}</span>
+                                <span className="text-gray-900 font-medium">{formatINR((ride.fare || 0) * 0.1)}</span>
                             </div>
                             <div className="flex justify-between font-bold border-t border-gray-200 pt-3">
                                 <span className="text-gray-900">Total</span>
-                                <span className="text-gray-900">${(ride.fare || 0).toFixed(2)}</span>
+                                <span className="text-gray-900">{formatINR(ride.fare || 0)}</span>
                             </div>
                         </div>
                     </div>

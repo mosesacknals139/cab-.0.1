@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, Lock, Loader2, ShieldCheck } from "lucide-react";
 import { showToast } from "@/components/Toast";
+import { formatINR } from "@/lib/currency";
 
 interface PaymentModalProps {
     rideId: string;
@@ -94,7 +95,7 @@ export default function PaymentModal({
                     <div>
                         <h2 className="text-xl font-bold text-gray-900 dark:text-white">Complete Payment</h2>
                         <p className="text-2xl font-black text-blue-600 dark:text-blue-400 mt-1">
-                            ₹{(fare * 80).toFixed(2)} {/* Mock conversion to INR */}
+                            {formatINR(fare)}
                         </p>
                     </div>
                     <button

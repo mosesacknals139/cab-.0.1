@@ -1,130 +1,188 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import L from "leaflet";
+import { CircleMarker, MapContainer, Marker, Polyline, TileLayer, useMap, useMapEvents } from "react-leaflet";
+
+interface Point {
+    lat: number;
+    lng: number;
+}
+
+interface SelectionPoint extends Point {
+    address: string;
+}
 
 interface MapProps {
     pickup?: string;
     destination?: string;
+    pickupCoords?: Point | null;
+    destinationCoords?: Point | null;
+    selectionTarget?: "pickup" | "destination";
+    onPickupSelect?: (data: SelectionPoint) => void;
+    onDestinationSelect?: (data: SelectionPoint) => void;
 }
 
-declare global {
-    interface Window {
-        google: typeof google;
-        initGoogleMap?: () => void;
-    }
+const chennaiCenter: [number, number] = [13.0827, 80.2707];
+
+const pickupIcon = L.divIcon({
+    className: "",
+    html: '<div style="width:28px;height:28px;border-radius:9999px;background:#111827;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px Arial;border:2px solid #fff;box-shadow:0 8px 18px rgba(0,0,0,.24)">P</div>',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+});
+
+const dropIcon = L.divIcon({
+    className: "",
+    html: '<div style="width:28px;height:28px;border-radius:9999px;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px Arial;border:2px solid #fff;box-shadow:0 8px 18px rgba(37,99,235,.32)">D</div>',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+});
+
+function MapClickHandler({
+    selectionTarget,
+    onPickupSelect,
+    onDestinationSelect,
+}: {
+    selectionTarget: "pickup" | "destination";
+    onPickupSelect?: (data: SelectionPoint) => void;
+    onDestinationSelect?: (data: SelectionPoint) => void;
+}) {
+    useMapEvents({
+        click: async (event) => {
+            const lat = event.latlng.lat;
+            const lng = event.latlng.lng;
+            let address = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+
+            try {
+                const params = new URLSearchParams({
+                    lat: lat.toString(),
+                    lon: lng.toString(),
+                    format: "jsonv2",
+                    "accept-language": "en",
+                });
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`);
+                if (response.ok) {
+                    const data = (await response.json()) as { display_name?: string };
+                    if (data.display_name) address = data.display_name;
+                }
+            } catch {
+                // Keep coordinate fallback.
+            }
+
+            const point = { address, lat, lng };
+            if (selectionTarget === "pickup") {
+                onPickupSelect?.(point);
+            } else {
+                onDestinationSelect?.(point);
+            }
+        },
+    });
+
+    return null;
 }
 
-export default function MapComponent({ pickup, destination }: MapProps) {
-    const mapRef = useRef<HTMLDivElement>(null);
-    const mapInstanceRef = useRef<google.maps.Map | null>(null);
-    const rendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
-    const [isLoaded, setIsLoaded] = useState(false);
+function MapViewport({ pickupCoords, destinationCoords }: { pickupCoords?: Point | null; destinationCoords?: Point | null }) {
+    const map = useMap();
 
-    // Load Google Maps script once
     useEffect(() => {
-        if (window.google?.maps) {
-            setIsLoaded(true);
+        if (pickupCoords && destinationCoords) {
+            map.fitBounds(
+                [
+                    [pickupCoords.lat, pickupCoords.lng],
+                    [destinationCoords.lat, destinationCoords.lng],
+                ],
+                { padding: [60, 60] }
+            );
             return;
         }
 
-        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
-        const scriptId = "google-maps-script";
+        if (pickupCoords) {
+            map.flyTo([pickupCoords.lat, pickupCoords.lng], 14, { duration: 0.6 });
+            return;
+        }
 
-        if (document.getElementById(scriptId)) return;
+        if (destinationCoords) {
+            map.flyTo([destinationCoords.lat, destinationCoords.lng], 14, { duration: 0.6 });
+        }
+    }, [map, pickupCoords, destinationCoords]);
 
-        window.initGoogleMap = () => setIsLoaded(true);
+    return null;
+}
 
-        const script = document.createElement("script");
-        script.id = scriptId;
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry&callback=initGoogleMap`;
-        script.async = true;
-        script.defer = true;
-        document.head.appendChild(script);
+export default function MapComponent({
+    pickupCoords,
+    destinationCoords,
+    selectionTarget = "pickup",
+    onPickupSelect,
+    onDestinationSelect,
+}: MapProps) {
+    const [route, setRoute] = useState<[number, number][]>([]);
+    const [routeError, setRouteError] = useState<string | null>(null);
 
-        return () => {
-            delete window.initGoogleMap;
-        };
-    }, []);
-
-    // Initialize map after script load
     useEffect(() => {
-        if (!isLoaded || !mapRef.current || mapInstanceRef.current) return;
+        const controller = new AbortController();
 
-        const map = new google.maps.Map(mapRef.current, {
-            center: { lat: 40.7128, lng: -74.006 },
-            zoom: 12,
-            disableDefaultUI: true,
-            styles: [
-                { featureType: "poi", stylers: [{ visibility: "off" }] },
-                { featureType: "transit", stylers: [{ visibility: "off" }] },
-                {
-                    featureType: "all",
-                    elementType: "labels.text.fill",
-                    stylers: [{ color: "#9ca3af" }],
-                },
-                {
-                    featureType: "water",
-                    elementType: "geometry",
-                    stylers: [{ color: "#dbeafe" }],
-                },
-                {
-                    featureType: "road",
-                    elementType: "geometry",
-                    stylers: [{ color: "#ffffff" }],
-                },
-                {
-                    featureType: "landscape",
-                    elementType: "geometry",
-                    stylers: [{ color: "#f3f4f6" }],
-                },
-            ],
-        });
+        if (!pickupCoords || !destinationCoords) {
+            return () => controller.abort();
+        }
 
-        const renderer = new google.maps.DirectionsRenderer({
-            suppressMarkers: false,
-            polylineOptions: {
-                strokeColor: "#2563eb",
-                strokeWeight: 5,
-                strokeOpacity: 0.9,
-            },
-        });
-        renderer.setMap(map);
-
-        mapInstanceRef.current = map;
-        rendererRef.current = renderer;
-    }, [isLoaded]);
-
-    // Update directions when pickup/destination change
-    useEffect(() => {
-        if (!isLoaded || !mapInstanceRef.current || !rendererRef.current) return;
-        if (!pickup || !destination) return;
-
-        const directionsService = new google.maps.DirectionsService();
-        directionsService.route(
-            {
-                origin: pickup,
-                destination: destination,
-                travelMode: google.maps.TravelMode.DRIVING,
-            },
-            (result, status) => {
-                if (status === google.maps.DirectionsStatus.OK && result) {
-                    rendererRef.current!.setDirections(result);
-                } else {
-                    console.warn("Directions error:", status);
+        const fetchRoute = async () => {
+            try {
+                const response = await fetch(
+                    `https://router.project-osrm.org/route/v1/driving/${pickupCoords.lng},${pickupCoords.lat};${destinationCoords.lng},${destinationCoords.lat}?overview=full&geometries=geojson`,
+                    { signal: controller.signal }
+                );
+                if (!response.ok) {
+                    setRoute([]);
+                    setRouteError("Route preview unavailable.");
+                    return;
                 }
+                const data = (await response.json()) as {
+                    routes?: Array<{ geometry?: { coordinates?: [number, number][] } }>;
+                };
+                const coordinates = data.routes?.[0]?.geometry?.coordinates ?? [];
+                setRoute(coordinates.map(([lng, lat]) => [lat, lng]));
+                setRouteError(null);
+            } catch {
+                setRouteError("Route preview unavailable.");
             }
-        );
-    }, [pickup, destination, isLoaded]);
+        };
+
+        void fetchRoute();
+        return () => controller.abort();
+    }, [pickupCoords, destinationCoords]);
 
     return (
         <div className="relative h-full w-full">
-            <div ref={mapRef} className="h-full w-full" />
-            {!isLoaded && (
-                <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-3 text-gray-500">
-                        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-                        <p className="text-sm font-medium">Loading map...</p>
-                    </div>
+            <MapContainer center={chennaiCenter} zoom={12} className="h-full w-full" zoomControl={false}>
+                <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <MapViewport pickupCoords={pickupCoords} destinationCoords={destinationCoords} />
+                <MapClickHandler
+                    selectionTarget={selectionTarget}
+                    onPickupSelect={onPickupSelect}
+                    onDestinationSelect={onDestinationSelect}
+                />
+                {pickupCoords && <Marker position={[pickupCoords.lat, pickupCoords.lng]} icon={pickupIcon} />}
+                {destinationCoords && <Marker position={[destinationCoords.lat, destinationCoords.lng]} icon={dropIcon} />}
+                {!pickupCoords && (
+                    <CircleMarker center={chennaiCenter} radius={6} pathOptions={{ color: "#111827", fillColor: "#111827", fillOpacity: 1 }} />
+                )}
+                {pickupCoords && destinationCoords && route.length > 0 && (
+                    <Polyline positions={route} pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.85 }} />
+                )}
+            </MapContainer>
+
+            <div className="absolute left-1/2 top-4 z-[500] -translate-x-1/2 rounded-full bg-white/95 px-3 py-1.5 text-xs font-semibold text-gray-800 shadow-md">
+                Click map to set {selectionTarget === "pickup" ? "Pickup" : "Drop"}
+            </div>
+
+            {pickupCoords && destinationCoords && routeError && (
+                <div className="absolute bottom-4 left-1/2 z-[500] -translate-x-1/2 rounded-full bg-black/80 px-3 py-1.5 text-xs text-white">
+                    {routeError}
                 </div>
             )}
         </div>

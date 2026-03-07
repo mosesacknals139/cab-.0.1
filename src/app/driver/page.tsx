@@ -7,6 +7,7 @@ import { showToast } from "@/components/Toast";
 
 import { Car, MapPin, Navigation, Clock, CheckCircle2, XCircle } from "lucide-react";
 import Link from "next/link";
+import { formatINR } from "@/lib/currency";
 
 export default function DriverDashboard() {
     const { user, isLoaded } = useUser();
@@ -126,7 +127,7 @@ export default function DriverDashboard() {
                                             <h3 className="text-2xl font-bold">Ride to {activeRide.dropoff_location}</h3>
                                         </div>
                                         <div className="bg-white/10 px-4 py-2 rounded-xl backdrop-blur-md">
-                                            <p className="text-xl font-bold">${activeRide.fare}</p>
+                                            <p className="text-xl font-bold">{formatINR(activeRide.fare || 0)}</p>
                                         </div>
                                     </div>
 
@@ -162,7 +163,7 @@ export default function DriverDashboard() {
                                                 <Clock size={16} />
                                                 <span className="text-sm font-bold">Just now</span>
                                             </div>
-                                            <span className="text-lg font-black text-gray-900">${ride.fare}</span>
+                                            <span className="text-lg font-black text-gray-900">{formatINR(ride.fare || 0)}</span>
                                         </div>
                                         <div className="space-y-3">
                                             <div className="flex items-start gap-3">
@@ -213,7 +214,7 @@ export default function DriverDashboard() {
                             <div className="pt-4 border-t border-gray-50">
                                 <div className="flex items-center justify-between text-sm">
                                     <span className="text-gray-500">Today's Earnings</span>
-                                    <span className="font-bold text-green-600">$142.50</span>
+                                    <span className="font-bold text-green-600">{formatINR(142.5)}</span>
                                 </div>
                             </div>
                         </div>

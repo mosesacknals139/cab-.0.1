@@ -4,18 +4,35 @@ import { useUser, UserButton } from "@clerk/nextjs";
 import { Search, MapPin, Navigation, Car, Shield, CreditCard, Loader2, User, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import MapComponent from "@/components/MapComponent";
+import dynamic from "next/dynamic";
 import AutocompleteInput from "@/components/AutocompleteInput";
 import { supabase } from "@/lib/supabase-client";
 import { showToast } from "@/components/Toast";
 import PaymentModal from "@/components/PaymentModal";
+import { formatINR } from "@/lib/currency";
 import { Receipt } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
+type RidePoint = { address: string; lat: number; lng: number };
+
+const MapComponent = dynamic(() => import("@/components/MapComponent"), {
+    ssr: false,
+    loading: () => (
+        <div className="flex h-full w-full items-center justify-center bg-gray-100 text-sm text-gray-500 dark:bg-zinc-900 dark:text-zinc-400">
+            Loading map...
+        </div>
+    ),
+});
+
 export default function Dashboard() {
+    const BASE_FARE_INR = 249;
     const { user, isLoaded } = useUser();
     const [pickup, setPickup] = useState("");
     const [destination, setDestination] = useState("");
+    const [pickupPoint, setPickupPoint] = useState<RidePoint | null>(null);
+    const [destinationPoint, setDestinationPoint] = useState<RidePoint | null>(null);
+    const [selectionTarget, setSelectionTarget] = useState<"pickup" | "destination">("pickup");
+    const [estimatedFare, setEstimatedFare] = useState(BASE_FARE_INR);
     const [isConfirming, setIsConfirming] = useState(false);
     const [isBooking, setIsBooking] = useState(false);
     const [rideId, setRideId] = useState<string | null>(null);
@@ -53,6 +70,10 @@ export default function Dashboard() {
                         setRideStatus(null);
                         setPickup("");
                         setDestination("");
+                        setPickupPoint(null);
+                        setDestinationPoint(null);
+                        setEstimatedFare(BASE_FARE_INR);
+                        setSelectionTarget("pickup");
                         setIsConfirming(false);
                     }
                 }
@@ -64,7 +85,43 @@ export default function Dashboard() {
         };
     }, [rideId]);
 
+    useEffect(() => {
+        if (!pickupPoint || !destinationPoint) {
+            setEstimatedFare(BASE_FARE_INR);
+            return;
+        }
+
+        const toRad = (v: number) => (v * Math.PI) / 180;
+        const R = 6371;
+        const dLat = toRad(destinationPoint.lat - pickupPoint.lat);
+        const dLng = toRad(destinationPoint.lng - pickupPoint.lng);
+        const lat1 = toRad(pickupPoint.lat);
+        const lat2 = toRad(destinationPoint.lat);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2);
+        const distanceKm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const dynamicFare = Math.max(BASE_FARE_INR, Math.round(80 + distanceKm * 24));
+        setEstimatedFare(dynamicFare);
+    }, [pickupPoint, destinationPoint]);
+
+    const handlePickupSelect = (point: RidePoint) => {
+        setPickup(point.address);
+        setPickupPoint(point);
+        setSelectionTarget("destination");
+    };
+
+    const handleDestinationSelect = (point: RidePoint) => {
+        setDestination(point.address);
+        setDestinationPoint(point);
+    };
+
     const handleRequestRide = async () => {
+        if (!pickupPoint || !destinationPoint) {
+            showToast("Select pickup and drop points from map or address suggestions.", "error");
+            return;
+        }
+
         setIsBooking(true);
         try {
             const response = await fetch("/api/ride", {
@@ -73,11 +130,11 @@ export default function Dashboard() {
                 body: JSON.stringify({
                     pickup_location: pickup,
                     dropoff_location: destination,
-                    pickup_lat: 40.7128,
-                    pickup_lng: -74.0060,
-                    dropoff_lat: 40.7306,
-                    dropoff_lng: -73.9352,
-                    fare: 12.50,
+                    pickup_lat: pickupPoint.lat,
+                    pickup_lng: pickupPoint.lng,
+                    dropoff_lat: destinationPoint.lat,
+                    dropoff_lng: destinationPoint.lng,
+                    fare: estimatedFare,
                 }),
             });
 
@@ -137,17 +194,21 @@ export default function Dashboard() {
                             <div className="absolute left-[17px] top-[24px] bottom-[24px] w-0.5 bg-gray-200 dark:bg-zinc-800"></div>
 
                             <AutocompleteInput
-                                placeholder="Enter pickup location"
+                                placeholder="Pickup (e.g. T. Nagar, Chennai)"
                                 value={pickup}
                                 onChange={setPickup}
+                                onPlaceSelect={handlePickupSelect}
+                                onFocus={() => setSelectionTarget("pickup")}
                                 className="w-full pl-10 pr-4 py-4 bg-gray-50 dark:bg-zinc-900 border border-transparent focus:border-blue-500 focus:bg-white dark:focus:bg-zinc-800 rounded-2xl transition-all outline-none text-sm font-medium dark:text-white"
                                 icon={<div className="w-2 h-2 rounded-full bg-black dark:bg-white"></div>}
                             />
 
                             <AutocompleteInput
-                                placeholder="Where to?"
+                                placeholder="Drop (e.g. Tambaram, Chennai)"
                                 value={destination}
                                 onChange={setDestination}
+                                onPlaceSelect={handleDestinationSelect}
+                                onFocus={() => setSelectionTarget("destination")}
                                 className="w-full pl-10 pr-4 py-4 bg-gray-50 dark:bg-zinc-900 border border-transparent focus:border-blue-500 focus:bg-white dark:focus:bg-zinc-800 rounded-2xl transition-all outline-none text-sm font-medium dark:text-white"
                                 icon={<div className="w-2 h-2 bg-blue-600"></div>}
                             />
@@ -160,14 +221,14 @@ export default function Dashboard() {
                                 initial={{ opacity: 0, height: 0 }}
                                 animate={{ opacity: 1, height: 'auto' }}
                                 exit={{ opacity: 0, height: 0 }}
-                                className="space-y-4 pt-4 overflow-hidden"
+                                className="space-y-4 pt-4 overflow-visible"
                             >
                                 <h3 className="font-bold text-gray-900 dark:text-white text-sm uppercase tracking-wider">Suggested Rides</h3>
                                 <div className="space-y-3">
                                     {[
-                                        { id: 'uberx', name: 'UberX', price: '$12.50', time: '5 min away', icon: Car, active: true, desc: 'Fast, everyday rides' },
-                                        { id: 'comfort', name: 'Uber Comfort', price: '$18.20', time: '3 min away', icon: Shield, desc: 'Newer cars, extra legroom' },
-                                        { id: 'black', name: 'Uber Black', price: '$28.00', time: '8 min away', icon: Navigation, desc: 'Luxury rides with top-rated drivers' },
+                                        { id: 'uberx', name: 'UberX', price: formatINR(estimatedFare), time: '5 min away', icon: Car, active: true, desc: 'Fast, everyday rides' },
+                                        { id: 'comfort', name: 'Uber Comfort', price: formatINR(estimatedFare + 120), time: '3 min away', icon: Shield, desc: 'Newer cars, extra legroom' },
+                                        { id: 'black', name: 'Uber Black', price: formatINR(estimatedFare + 260), time: '8 min away', icon: Navigation, desc: 'Luxury rides with top-rated drivers' },
                                     ].map((ride, i) => (
                                         <motion.button
                                             key={ride.id}
@@ -202,7 +263,7 @@ export default function Dashboard() {
                         >
                             <div className="flex justify-between items-center">
                                 <span className="font-bold text-blue-900 dark:text-blue-300">Total Fare</span>
-                                <span className="text-2xl font-black text-blue-900 dark:text-blue-300">$12.50</span>
+                                <span className="text-2xl font-black text-blue-900 dark:text-blue-300">{formatINR(estimatedFare)}</span>
                             </div>
                             <p className="text-xs text-blue-700 dark:text-blue-400">Includes all taxes and fees. Driver will arrive in approx. 5 minutes.</p>
                         </motion.div>
@@ -288,7 +349,15 @@ export default function Dashboard() {
 
             {/* Map Section */}
             <div className="flex-grow relative bg-gray-100 dark:bg-zinc-900">
-                <MapComponent pickup={pickup} destination={destination} />
+                <MapComponent
+                    pickup={pickup}
+                    destination={destination}
+                    pickupCoords={pickupPoint ? { lat: pickupPoint.lat, lng: pickupPoint.lng } : null}
+                    destinationCoords={destinationPoint ? { lat: destinationPoint.lat, lng: destinationPoint.lng } : null}
+                    selectionTarget={selectionTarget}
+                    onPickupSelect={handlePickupSelect}
+                    onDestinationSelect={handleDestinationSelect}
+                />
             </div>
 
             {/* Stripe Payment Modal */}
@@ -296,7 +365,7 @@ export default function Dashboard() {
                 {showPayment && completedRideId && (
                     <PaymentModal
                         rideId={completedRideId}
-                        fare={12.50}
+                        fare={estimatedFare}
                         onClose={() => setShowPayment(false)}
                         onSuccess={() => {
                             setShowPayment(false);

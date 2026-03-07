@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase-client";
 import { MapPin, Navigation, Clock, CheckCircle2, XCircle, Loader2, ArrowLeft, Receipt } from "lucide-react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
+import { formatINR } from "@/lib/currency";
 
 interface Ride {
     id: string;
@@ -55,7 +56,7 @@ export default function RideHistoryPage() {
     }, [isLoaded, user]);
 
     const formatDate = (iso: string) => {
-        return new Intl.DateTimeFormat("en-US", {
+        return new Intl.DateTimeFormat("en-IN", {
             month: "short",
             day: "numeric",
             year: "numeric",
@@ -95,7 +96,7 @@ export default function RideHistoryPage() {
                         },
                         {
                             label: "Total Spent",
-                            value: `$${totalSpent.toFixed(2)}`,
+                            value: formatINR(totalSpent),
                         },
                     ].map((stat, i) => (
                         <motion.div
@@ -172,7 +173,7 @@ export default function RideHistoryPage() {
 
                                                 <div className="text-right shrink-0 space-y-2">
                                                     <p className="text-xl font-black text-gray-900 dark:text-white">
-                                                        ${(ride.fare || 0).toFixed(2)}
+                                                        {formatINR(ride.fare || 0)}
                                                     </p>
                                                     <span
                                                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${config.color}`}
