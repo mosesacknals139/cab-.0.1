@@ -34,7 +34,7 @@ export function formatSupabaseError(error: SupabaseErrorLike, tableName?: string
   }
 
   if (isSupabasePermissionError(error)) {
-    return "Supabase blocked this write. Add SUPABASE_SERVICE_ROLE_KEY to .env.local for server routes, or configure Clerk JWT auth for Supabase.";
+    return "Supabase blocked this write. This app's server routes require SUPABASE_SERVICE_ROLE_KEY (set it in .env.local locally and in Vercel Project Settings -> Environment Variables for production).";
   }
 
   if (error.code === "23503") {
