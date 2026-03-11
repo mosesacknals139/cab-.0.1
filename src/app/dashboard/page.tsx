@@ -41,6 +41,8 @@ const MapComponent = dynamic(() => import("@/components/MapComponent"), {
 
 export default function Dashboard() {
     const BASE_FARE_INR = 249;
+    const RIDE_REQUEST_TIMEOUT_MS = 15_000;
+    const DRIVER_MATCH_TIMEOUT_MS = 60_000;
     const { user, isLoaded } = useUser();
     const [pickup, setPickup] = useState("");
     const [destination, setDestination] = useState("");
@@ -58,6 +60,7 @@ export default function Dashboard() {
     const [currentRideStatus, setCurrentRideStatus] = useState<RideStatus | null>(null);
     const rideStatusRef = useRef<RideStatus | null>(null);
     const rideStatusErrorNotifiedRef = useRef(false);
+    const rideRequestedAtRef = useRef<number | null>(null);
     const selectedRide = RIDE_OPTIONS.find((ride) => ride.id === selectedRideType) ?? RIDE_OPTIONS[0];
     const selectedRideFare = estimatedFare + selectedRide.surcharge;
 
@@ -76,8 +79,13 @@ export default function Dashboard() {
         let cancelled = false;
         const syncRideStatus = async () => {
             try {
+                const controller = new AbortController();
+                const timeoutId = window.setTimeout(() => controller.abort(), 8_000);
                 const response = await fetch(`/api/ride/${rideId}`, {
                     cache: "no-store",
+                    signal: controller.signal,
+                }).finally(() => {
+                    window.clearTimeout(timeoutId);
                 });
                 const contentType = response.headers.get("content-type") || "";
                 const payload = contentType.includes("application/json")
@@ -102,6 +110,16 @@ export default function Dashboard() {
                 setCurrentRideStatus(nextStatus);
 
                 if (nextStatus === previousStatus) {
+                    if (
+                        nextStatus === "requested" &&
+                        rideRequestedAtRef.current &&
+                        Date.now() - rideRequestedAtRef.current > DRIVER_MATCH_TIMEOUT_MS
+                    ) {
+                        void fetch(`/api/ride/${rideId}/cancel`, { method: "POST" }).catch(() => undefined);
+                        showToast("No nearby drivers accepted this ride. Please try again.", "error");
+                        setRideId(null);
+                        resetRideDraft();
+                    }
                     return;
                 }
 
@@ -123,8 +141,16 @@ export default function Dashboard() {
                     setRideId(null);
                     resetRideDraft();
                 }
-            } catch {
+            } catch (error) {
                 if (cancelled) return;
+
+                if (error instanceof DOMException && error.name === "AbortError") {
+                    if (!rideStatusErrorNotifiedRef.current) {
+                        showToast("Ride status check timed out. Retrying...", "error");
+                        rideStatusErrorNotifiedRef.current = true;
+                    }
+                    return;
+                }
 
                 if (!rideStatusErrorNotifiedRef.current) {
                     showToast("Unable to refresh ride status. Retrying...", "error");
@@ -187,6 +213,7 @@ export default function Dashboard() {
         setCurrentRideStatus(null);
         rideStatusRef.current = null;
         rideStatusErrorNotifiedRef.current = false;
+        rideRequestedAtRef.current = null;
     };
 
     const handleRequestRide = async () => {
@@ -197,9 +224,12 @@ export default function Dashboard() {
 
         setIsBooking(true);
         try {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), RIDE_REQUEST_TIMEOUT_MS);
             const response = await fetch("/api/ride", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                signal: controller.signal,
                 body: JSON.stringify({
                     pickup_location: pickup,
                     dropoff_location: destination,
@@ -209,6 +239,8 @@ export default function Dashboard() {
                     dropoff_lng: destinationPoint.lng,
                     fare: selectedRideFare,
                 }),
+            }).finally(() => {
+                window.clearTimeout(timeoutId);
             });
 
             const contentType = response.headers.get("content-type") || "";
@@ -226,11 +258,17 @@ export default function Dashboard() {
                 rideStatusRef.current = (payload.status as RideStatus | undefined) || "requested";
                 setCurrentRideStatus((payload.status as RideStatus | undefined) || "requested");
                 rideStatusErrorNotifiedRef.current = false;
+                rideRequestedAtRef.current = Date.now();
                 showToast("Ride requested! Searching for nearby drivers...", "info");
             } else {
                 showToast("Booking failed. Please try again.", "error");
             }
         } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") {
+                showToast("Ride request timed out. Please check your internet and try again.", "error");
+                return;
+            }
+
             console.error("Ride request failed:", error);
             showToast("Ride request failed. Check your connection and try again.", "error");
         } finally {
@@ -403,14 +441,20 @@ export default function Dashboard() {
                                 transition={{ repeat: Infinity, duration: 2 }}
                                 className="text-gray-600 dark:text-zinc-400 font-medium"
                             >
-                                {currentRideStatus === "accepted" ? "Driver assigned. They're heading to pickup." : "Matching you with the nearest driver..."}
+                                {currentRideStatus === "accepted"
+                                    ? "Driver assigned. They're heading to pickup."
+                                    : currentRideStatus === "ongoing"
+                                        ? "Trip in progress..."
+                                        : "Matching you with the nearest driver..."}
                             </motion.p>
-                            <button
-                                onClick={handleCancelRideRequest}
-                                className="text-red-600 font-bold text-sm hover:underline"
-                            >
-                                Cancel Request
-                            </button>
+                            {(currentRideStatus === "requested" || currentRideStatus === null) && (
+                                <button
+                                    onClick={handleCancelRideRequest}
+                                    className="text-red-600 font-bold text-sm hover:underline"
+                                >
+                                    Cancel Request
+                                </button>
+                            )}
                         </div>
                     ) : (
                         <div className="pt-4">
