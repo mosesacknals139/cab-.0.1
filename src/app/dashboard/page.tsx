@@ -57,6 +57,7 @@ export default function Dashboard() {
     const [completedRideFare, setCompletedRideFare] = useState<number | null>(null);
     const [currentRideStatus, setCurrentRideStatus] = useState<RideStatus | null>(null);
     const rideStatusRef = useRef<RideStatus | null>(null);
+    const rideStatusErrorNotifiedRef = useRef(false);
     const selectedRide = RIDE_OPTIONS.find((ride) => ride.id === selectedRideType) ?? RIDE_OPTIONS[0];
     const selectedRideFare = estimatedFare + selectedRide.surcharge;
 
@@ -78,16 +79,24 @@ export default function Dashboard() {
                 const response = await fetch(`/api/ride/${rideId}`, {
                     cache: "no-store",
                 });
-                const payload = await response.json();
+                const contentType = response.headers.get("content-type") || "";
+                const payload = contentType.includes("application/json")
+                    ? await response.json()
+                    : { error: await response.text() };
 
                 if (!response.ok) {
-                    throw new Error(payload.error || "Failed to fetch ride status.");
+                    if (!rideStatusErrorNotifiedRef.current) {
+                        showToast(payload.error || "Unable to refresh ride status right now.", "error");
+                        rideStatusErrorNotifiedRef.current = true;
+                    }
+                    return;
                 }
 
                 if (cancelled) return;
 
                 const nextStatus = payload.status as RideStatus;
                 const previousStatus = rideStatusRef.current;
+                rideStatusErrorNotifiedRef.current = false;
 
                 rideStatusRef.current = nextStatus;
                 setCurrentRideStatus(nextStatus);
@@ -114,9 +123,12 @@ export default function Dashboard() {
                     setRideId(null);
                     resetRideDraft();
                 }
-            } catch (error) {
-                if (!cancelled) {
-                    console.error("Ride status sync failed:", error);
+            } catch {
+                if (cancelled) return;
+
+                if (!rideStatusErrorNotifiedRef.current) {
+                    showToast("Unable to refresh ride status. Retrying...", "error");
+                    rideStatusErrorNotifiedRef.current = true;
                 }
             }
         };
@@ -174,6 +186,7 @@ export default function Dashboard() {
         setIsConfirming(false);
         setCurrentRideStatus(null);
         rideStatusRef.current = null;
+        rideStatusErrorNotifiedRef.current = false;
     };
 
     const handleRequestRide = async () => {
@@ -212,6 +225,7 @@ export default function Dashboard() {
                 setRideId(payload.id);
                 rideStatusRef.current = (payload.status as RideStatus | undefined) || "requested";
                 setCurrentRideStatus((payload.status as RideStatus | undefined) || "requested");
+                rideStatusErrorNotifiedRef.current = false;
                 showToast("Ride requested! Searching for nearby drivers...", "info");
             } else {
                 showToast("Booking failed. Please try again.", "error");
