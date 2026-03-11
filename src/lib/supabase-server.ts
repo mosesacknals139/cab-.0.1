@@ -5,15 +5,29 @@ type SupabaseErrorLike = {
   message?: string | null;
 };
 
+type CreateServerSupabaseClientOptions = {
+  requireServiceRole?: boolean;
+};
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export function createServerSupabaseClient() {
+export function createServerSupabaseClient(options: CreateServerSupabaseClientOptions = {}) {
+  const requireServiceRole = options.requireServiceRole ?? true;
+
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error(
       "Supabase env vars are missing. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local."
     );
+  }
+
+  if (requireServiceRole && !supabaseServiceRoleKey) {
+    throw {
+      code: "SUPABASE_SERVICE_ROLE_KEY_MISSING",
+      message:
+        "SUPABASE_SERVICE_ROLE_KEY is missing in the current runtime. Add it to env, then restart `npm run dev` locally or redeploy on Vercel.",
+    } as SupabaseErrorLike;
   }
 
   return createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey, {
@@ -26,6 +40,10 @@ export function createServerSupabaseClient() {
 
 export function formatSupabaseError(error: SupabaseErrorLike, tableName?: string) {
   const message = error.message || "Supabase request failed.";
+
+  if (error.code === "SUPABASE_SERVICE_ROLE_KEY_MISSING") {
+    return "SUPABASE_SERVICE_ROLE_KEY is missing in the current runtime. Add it to env, then restart `npm run dev` locally or redeploy on Vercel.";
+  }
 
   if (isSupabaseSetupError(error)) {
     return tableName
